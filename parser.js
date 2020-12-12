@@ -1,6 +1,7 @@
 const parser = require('@babel/parser');
 const traverse = require('@babel/traverse').default;
 const generate = require('@babel/generator').default;
+const types = require('@babel/types');
 const fs = require('fs');
 const path = require('path');
 
@@ -13,27 +14,36 @@ const ast = parser.parse(code);
 const filesMap = {};
 
 traverse(ast, {
-  ArrayExpression: {
-    enter(arrayPath) {
-      arrayPath.traverse({
-        FunctionExpression: {
-          enter(path) {
-            if (path.node.params.length === 3
-              && path.node.params[0].name == 't'
-              && path.node.params[1].name == 'e'
-              && path.node.params[2].name == 'i') {
+  ArrayExpression(arrayPath) {
+    arrayPath.traverse({
+      FunctionExpression(path) {
+        if (path.node.params.length === 3
+          && path.node.params[0].name == 't'
+          && path.node.params[1].name == 'e'
+          && path.node.params[2].name == 'i') {
 
-              const { code } = generate(path.node);
-
-              filesMap[path.key] = code;
-
-              path.skip();
+          path.traverse({
+            UnaryExpression(unaryPath) {
+              if (unaryPath.node.operator === '!' && types.isNumericLiteral(unaryPath.node.argument)) {
+                if (unaryPath.node.argument.value == 0) {
+                  unaryPath.replaceWith(types.booleanLiteral(true));
+                } else if (unaryPath.node.argument.value == 1) {
+                  unaryPath.replaceWith(types.booleanLiteral(false));
+                }
+              } else if (unaryPath.node.operator === 'void' && types.isNumericLiteral(unaryPath.node.argument) && unaryPath.node.argument.value === 0) {
+                unaryPath.replaceWith(types.identifier('undefined'));
+              }
             }
-          }
+          });
+
+          const { code } = generate(path.node);
+
+          filesMap[path.key] = code;
         }
-      });
-    },
-  },
+        path.skip();
+      }
+    });
+  }
 });
 
 Object.keys(filesMap).forEach(key => {
