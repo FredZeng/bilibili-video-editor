@@ -22,6 +22,9 @@ traverse(ast, {
           && path.node.params[1].name == 'e'
           && path.node.params[2].name == 'i') {
 
+          path.scope.rename('e', 'exports');
+          path.scope.rename('i', 'imports');
+
           path.traverse({
             UnaryExpression(unaryPath) {
               if (unaryPath.node.operator === '!' && types.isNumericLiteral(unaryPath.node.argument)) {
@@ -33,10 +36,38 @@ traverse(ast, {
               } else if (unaryPath.node.operator === 'void' && types.isNumericLiteral(unaryPath.node.argument) && unaryPath.node.argument.value === 0) {
                 unaryPath.replaceWith(types.identifier('undefined'));
               }
+            },
+            ExpressionStatement(expressPath) {
+              const expression = expressPath.node.expression;
+              if (types.isAssignmentExpression(expression)) {
+                if (expression.operator === '='
+                  && types.isMemberExpression(expression.left)
+                  && types.isIdentifier(expression.left.object)
+                  && expression.left.object.name === 'exports'
+                  && types.isIdentifier(expression.left.property)) {
+                  const exportName = expression.left.property.name;
+                  if (exportName === 'default') {
+                    expressPath.replaceWith(types.exportDefaultDeclaration(expression.right));
+                  } else {
+                    expressPath.replaceWith(
+                      types.exportNamedDeclaration(
+                        types.variableDeclaration('const', [types.variableDeclarator(types.identifier(exportName), expression.right)])
+                      )
+                    );
+                  }
+                }
+              }
+            },
+            CallExpression(callPath) {
+              const arguments = callPath.node.arguments;
+              if (arguments.length === 3 && types.isStringLiteral(arguments[1]) && arguments[1].value === '__esModule') {
+                callPath.remove();
+              }
             }
           });
 
-          const { code } = generate(path.node);
+          const { body, directives } = path.node.body;
+          const { code } = generate(types.program(body, directives, 'module'));
 
           filesMap[path.key] = code;
         }
