@@ -15,63 +15,109 @@ const filesMap = {};
 
 traverse(ast, {
   ArrayExpression(arrayPath) {
+    // Module
     arrayPath.traverse({
-      FunctionExpression(path) {
-        if (path.node.params.length === 3
-          && path.node.params[0].name == 't'
-          && path.node.params[1].name == 'e'
-          && path.node.params[2].name == 'i') {
+      FunctionExpression(modulePath) {
+        const moduleParams = modulePath.node.params;
+        if (moduleParams.length === 3
+          && moduleParams[0].name == 't'
+          && moduleParams[1].name == 'e'
+          && moduleParams[2].name == 'i') {
 
-          path.scope.rename('e', 'exports');
-          path.scope.rename('i', 'imports');
+          modulePath.scope.rename('e', 'exports');
+          modulePath.scope.rename('i', 'imports');
 
-          path.traverse({
+          modulePath.traverse({
             UnaryExpression(unaryPath) {
-              if (unaryPath.node.operator === '!' && types.isNumericLiteral(unaryPath.node.argument)) {
-                if (unaryPath.node.argument.value == 0) {
+              const unaryArg = unaryPath.node.argument;
+              if (unaryPath.node.operator === '!' && types.isNumericLiteral(unaryArg)) {
+                /**
+                 * convert `!0` => `true`
+                 * convert `!1` => `false`
+                 */
+                if (unaryArg.value == 0) {
                   unaryPath.replaceWith(types.booleanLiteral(true));
-                } else if (unaryPath.node.argument.value == 1) {
+                } else if (unaryArg.value == 1) {
                   unaryPath.replaceWith(types.booleanLiteral(false));
                 }
-              } else if (unaryPath.node.operator === 'void' && types.isNumericLiteral(unaryPath.node.argument) && unaryPath.node.argument.value === 0) {
+              } else if (unaryPath.node.operator === 'void' && types.isNumericLiteral(unaryArg) && unaryArg.value === 0) {
+                // convert `void 0` => `undefined`
                 unaryPath.replaceWith(types.identifier('undefined'));
               }
             },
-            ExpressionStatement(expressPath) {
-              const expression = expressPath.node.expression;
-              if (types.isAssignmentExpression(expression)) {
-                if (expression.operator === '='
-                  && types.isMemberExpression(expression.left)
-                  && types.isIdentifier(expression.left.object)
-                  && expression.left.object.name === 'exports'
-                  && types.isIdentifier(expression.left.property)) {
-                  const exportName = expression.left.property.name;
-                  if (exportName === 'default') {
-                    expressPath.replaceWith(types.exportDefaultDeclaration(expression.right));
-                  } else {
-                    expressPath.replaceWith(
-                      types.exportNamedDeclaration(
-                        types.variableDeclaration('const', [types.variableDeclarator(types.identifier(exportName), expression.right)])
-                      )
-                    );
+            ExpressionStatement(expressionPath) {
+              expressionPath.traverse({
+                AssignmentExpression(assignPath) {
+                  const assignNode = assignPath.node;
+                  if (types.isAssignmentExpression(assignNode.right)) {
+                    assignPath.skip();
+                  }
+                  if (assignNode.operator === '='
+                    && types.isMemberExpression(assignNode.left)
+                    && types.isIdentifier(assignNode.left.object)
+                    && assignNode.left.object.name === 'exports') {
+                    const exportName = assignNode.left.property.name;
+
+                    if (exportName === 'default') {
+                      /**
+                       * remove `exports.default = void 0`
+                       */
+                      if (types.isUnaryExpression(assignNode.right)
+                        && assignNode.right.operator === 'void'
+                        && types.isNumericLiteral(assignNode.right.argument)
+                        && assignNode.right.argument.value === 0) {
+                        assignPath.remove();
+                      } else if (types.isExpressionStatement(assignPath.parent)) {
+                        // convert `exports.default = any;` => `export default any;`
+                        assignPath.parentPath.replaceWith(types.exportDefaultDeclaration(assignNode.right));
+                      }
+                    } else {
+                      expressionPath.insertBefore(types.exportNamedDeclaration(
+                        types.variableDeclaration('const', [types.variableDeclarator(types.identifier(exportName), assignNode.right)])
+                      ));
+                      assignPath.remove();
+                    }
                   }
                 }
-              }
+              });
+            },
+            VariableDeclaration(variablePath) {
+              variablePath.traverse({
+                AssignmentExpression(assignPath) {
+                  const assignNode = assignPath.node;
+                  if (types.isAssignmentExpression(assignNode.right)) {
+                    assignPath.skip();
+                  }
+                  if (assignNode.operator === '='
+                    && types.isMemberExpression(assignNode.left)
+                    && types.isIdentifier(assignNode.left.object)
+                    && assignNode.left.object.name === 'exports') {
+                    const exportName = assignNode.left.property.name;
+
+                    if (exportName !== 'default') {
+                      variablePath.insertBefore(types.exportNamedDeclaration(
+                        types.variableDeclaration('const', [types.variableDeclarator(types.identifier(exportName), assignNode.right)])
+                      ));
+                      assignPath.replaceWith(assignNode.right);
+                    }
+                  }
+                }
+              });
             },
             CallExpression(callPath) {
-              const arguments = callPath.node.arguments;
-              if (arguments.length === 3 && types.isStringLiteral(arguments[1]) && arguments[1].value === '__esModule') {
+              const args = callPath.node.arguments;
+              if (args.length === 3 && types.isStringLiteral(args[1]) && args[1].value === '__esModule') {
                 callPath.remove();
               }
             }
           });
 
-          const { body, directives } = path.node.body;
+          const { body, directives } = modulePath.node.body;
           const { code } = generate(types.program(body, directives, 'module'));
 
-          filesMap[path.key] = code;
+          filesMap[modulePath.key] = code;
         }
-        path.skip();
+        modulePath.skip();
       }
     });
   }
